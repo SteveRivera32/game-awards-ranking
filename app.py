@@ -34,6 +34,7 @@ WINNERS_FILE = "winners.json"
 CUSTOM_FRIEND_NAMES = {
     "jose": "Girard",
     "juan": "Tlone",
+    "eri": "Dessi",
 }
 
 # Sistema de puntuación (según tu tabla de la captura)
