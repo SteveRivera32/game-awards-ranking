@@ -6,8 +6,8 @@ import streamlit as st
 
 # ========== CONFIGURACIÓN BÁSICA ==========
 
-#EXCEL_FILE = "Predicciones Game Awards 2025 (Respuestas).xlsx"
-EXCEL_FILE = "predicciones_test_nominados.xlsx"
+EXCEL_FILE = "Predicciones Game Awards 2025 (Respuestas).xlsx"
+#EXCEL_FILE = "predicciones_test_nominados.xlsx"
 
 # Usaremos el nick de Discord como identificador
 COLUMN_NOMBRE = "Nick de Discord"
