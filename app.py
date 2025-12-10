@@ -447,49 +447,88 @@ def main():
     # Panel lateral: Ganadores
     st.sidebar.header("🏆 Ganadores por categoría")
 
+    # Cargamos los ganadores actuales desde el archivo
     winners = load_winners(categories)
-    updated_winners = {}
 
-    for cat in categories:
-        # opciones fijas definidas a mano (CATEGORY_OPTIONS)
-        fijas = CATEGORY_OPTIONS.get(cat, [])
+    # -------------------------------
+    # 🔐 MODO ADMINISTRADOR
+    # -------------------------------
+    st.sidebar.markdown("---")
+    st.sidebar.subheader("🔐 Modo administrador")
 
-        # opciones que salieron de las votaciones (por si hay algo raro escrito)
-        desde_votos = sorted(
-            {str(v).strip() for v in df[cat].dropna().unique()}
-        )
+    admin_password_input = st.sidebar.text_input(
+        "Contraseña de administrador",
+        type="password",
+        help="Solo el admin puede editar los ganadores.",
+    )
 
-        # unimos: fijas + extras desde votos, sin duplicados y manteniendo orden
-        todas = list(dict.fromkeys(fijas + desde_votos))
-        opciones = ["(Sin definir)"] + todas
+    # Leemos la contraseña real desde los secretos de Streamlit
+    ADMIN_PASSWORD = st.secrets.get("ADMIN_PASSWORD", "")
 
-        valor_actual = winners.get(cat, "")
-        if not valor_actual:
-            index_default = 0
+    admin_mode = False
+    if ADMIN_PASSWORD:
+        if admin_password_input == "":
+            st.sidebar.caption("Introduce la contraseña para editar los ganadores.")
+        elif admin_password_input == ADMIN_PASSWORD:
+            admin_mode = True
+            st.sidebar.success("Modo administrador activado.")
         else:
-            try:
-                index_default = opciones.index(valor_actual)
-            except ValueError:
-                index_default = 0
-
-        seleccionado = st.sidebar.selectbox(
-            label=f"{cat}",
-            options=opciones,
-            index=index_default,
-        )
-
-        if seleccionado == "(Sin definir)":
-            updated_winners[cat] = ""
-        else:
-            updated_winners[cat] = seleccionado
-
-    # Botón para guardar ganadores
-    if st.sidebar.button("💾 Guardar ganadores"):
-        save_winners(updated_winners)
-        st.sidebar.success("Ganadores guardados.")
-        winners = updated_winners
+            st.sidebar.error("Contraseña incorrecta.")
     else:
-        winners = updated_winners
+        st.sidebar.warning(
+            "ADMIN_PASSWORD no está configurado en los secretos de Streamlit."
+        )
+
+    # Copia editable de los ganadores actuales
+    updated_winners = dict(winners)
+
+    # Solo si estamos en modo admin mostramos los selectores para cambiar ganadores
+    if admin_mode:
+        for cat in categories:
+            # opciones fijas definidas a mano (CATEGORY_OPTIONS)
+            fijas = CATEGORY_OPTIONS.get(cat, [])
+
+            # opciones que salieron de las votaciones (por si hay algo raro escrito)
+            desde_votos = sorted(
+                {str(v).strip() for v in df[cat].dropna().unique()}
+            )
+
+            # unimos: fijas + extras desde votos, sin duplicados y manteniendo orden
+            todas = list(dict.fromkeys(fijas + desde_votos))
+            opciones = ["(Sin definir)"] + todas
+
+            valor_actual = winners.get(cat, "")
+            if not valor_actual:
+                index_default = 0
+            else:
+                try:
+                    index_default = opciones.index(valor_actual)
+                except ValueError:
+                    index_default = 0
+
+            seleccionado = st.sidebar.selectbox(
+                label=f"{cat}",
+                options=opciones,
+                index=index_default,
+            )
+
+            if seleccionado == "(Sin definir)":
+                updated_winners[cat] = ""
+            else:
+                updated_winners[cat] = seleccionado
+
+        # Botón para guardar ganadores (solo visible en modo admin)
+        if st.sidebar.button("💾 Guardar ganadores"):
+            save_winners(updated_winners)
+            st.sidebar.success("Ganadores guardados.")
+            winners = updated_winners
+        else:
+            winners = updated_winners
+    else:
+        # Modo solo lectura para el público general
+        st.sidebar.caption(
+            "Solo lectura. Los ganadores solo pueden ser modificados por el administrador."
+        )
 
     # =========================
     # 1) RANKING (ARRIBA)
