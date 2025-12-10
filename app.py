@@ -3,13 +3,18 @@ from pathlib import Path
 
 import pandas as pd
 import streamlit as st
+import re
 
 # ========== CONFIGURACIÓN BÁSICA ==========
 
+# Excel principal (seguidores)
 EXCEL_FILE = "Predicciones Game Awards 2025 (Respuestas).xlsx"
-#EXCEL_FILE = "predicciones_test_nominados.xlsx"
 
-# Usaremos el nick de Discord como identificador
+# Excel extra solo de amigos
+FRIENDS_EXCEL_FILE = "Predicciones Amigos (Respuestas).xlsx"
+FRIENDS_NAME_COLUMN = "Tu Nombre"
+
+# Usaremos el nick de Discord como identificador interno
 COLUMN_NOMBRE = "Nick de Discord"
 
 # Columnas que NO son categorías
@@ -20,6 +25,16 @@ NON_CATEGORY_COLUMNS = {
 }
 
 WINNERS_FILE = "winners.json"
+
+# ==================================================
+# NOMBRES PERSONALIZADOS (AMIGOS)
+# clave = nombre detectado tras limpieza
+# valor = nombre que quieres mostrar
+# ==================================================
+CUSTOM_FRIEND_NAMES = {
+    "jose": "Girard",
+    "juan": "Tlone",
+}
 
 # Sistema de puntuación (según tu tabla de la captura)
 # Si quieres ajustar algo, solo cambia los números aquí.
@@ -285,6 +300,51 @@ def load_predictions():
         )
     return df
 
+def load_friends_predictions():
+    path = Path(FRIENDS_EXCEL_FILE)
+    if not path.exists():
+        return None
+
+    df = pd.read_excel(path)
+
+    if FRIENDS_NAME_COLUMN not in df.columns:
+        raise ValueError(
+            f"No se encontró la columna de nombre '{FRIENDS_NAME_COLUMN}' en el Excel de amigos.\n"
+            f"Columnas disponibles: {list(df.columns)}"
+        )
+
+    # Renombramos "Tu Nombre" -> "Nick de Discord"
+    df = df.rename(columns={FRIENDS_NAME_COLUMN: COLUMN_NOMBRE})
+
+    # ==================================================
+    # LIMPIEZA FUERTE DE NOMBRES (AMIGOS)
+    # ==================================================
+    def limpiar_nombre(nombre):
+        if pd.isna(nombre):
+            return ""
+
+        nombre = str(nombre).strip()
+
+        # 1️⃣ Quitar signos , . ; : ! ?
+        nombre = re.sub(r"[,\.;:!?\(\)\[\]\{\}]", "", nombre)
+
+        # 2️⃣ Tomar solo la primera palabra
+        nombre = nombre.split()[0].strip()
+
+        if nombre == "":
+            return ""
+
+        # 3️⃣ Reemplazo manual (prioridad absoluta)
+        key = nombre.lower()
+        if key in CUSTOM_FRIEND_NAMES:
+            return CUSTOM_FRIEND_NAMES[key]
+
+        # 4️⃣ Si no hay reemplazo, devolver el nombre limpio
+        return nombre
+
+    df[COLUMN_NOMBRE] = df[COLUMN_NOMBRE].apply(limpiar_nombre)
+
+    return df
 
 def infer_categories(df):
     return [c for c in df.columns if c not in NON_CATEGORY_COLUMNS]
@@ -441,6 +501,65 @@ def main():
     except Exception as e:
         st.error(f"Error al cargar '{EXCEL_FILE}': {e}")
         st.stop()
+
+    # ==================================================
+    # Elegir qué nombre usar (Discord / Twitter / Auto)
+    # ==================================================
+    DISCORD_COL = COLUMN_NOMBRE          # normalmente "Nick de Discord"
+    TWITTER_COL = "Nick de Twitter"      # cambia esto si tu columna se llama distinto
+
+    st.sidebar.markdown("### 👤 Nombre a mostrar")
+    name_mode = st.sidebar.radio(
+        "Elige qué nombre usar en el ranking:",
+        [
+            "Usar Nick de Discord",
+            "Usar Nick de Twitter",
+            "Automático (Discord, si dice 'no tengo' usa Twitter)",
+        ],
+        index=2,  # por defecto el modo automático
+    )
+
+    # Hacemos una copia para no tocar el df original fuera de esta ejecución
+    df = df.copy()
+
+    def limpiar(texto):
+        if pd.isna(texto):
+            return ""
+        return str(texto).strip()
+
+    if name_mode == "Usar Nick de Discord":
+        # No hacemos nada; se queda la columna tal cual
+        pass
+
+    elif name_mode == "Usar Nick de Twitter":
+        if TWITTER_COL in df.columns:
+            df[DISCORD_COL] = df[TWITTER_COL].apply(limpiar)
+        else:
+            st.sidebar.warning(
+                f"No se encontró la columna '{TWITTER_COL}' en el Excel. "
+                "Se seguirá usando Nick de Discord."
+            )
+
+    elif name_mode == "Automático (Discord, si dice 'no tengo' usa Twitter)":
+        if TWITTER_COL in df.columns:
+            def elegir_nombre(row):
+                disc = limpiar(row.get(DISCORD_COL, ""))
+                tw = limpiar(row.get(TWITTER_COL, ""))
+
+                # Si el nick de Discord está vacío o es tipo "no tengo", usamos Twitter
+                if (
+                    disc == ""
+                    or disc.lower() in ["no tengo", "ninguno", "n/a", "no uso discord", "no tengo discord"]
+                ):
+                    return tw if tw != "" else disc
+                return disc
+
+            df[DISCORD_COL] = df.apply(elegir_nombre, axis=1)
+        else:
+            st.sidebar.warning(
+                f"No se encontró la columna '{TWITTER_COL}' en el Excel. "
+                "Se seguirá usando Nick de Discord."
+            )
 
     categories = infer_categories(df)
 
@@ -612,6 +731,92 @@ def main():
             file_name="resultados_game_awards_2025.csv",
             mime="text/csv",
         )
+
+        # =========================
+        # 1b) RANKING SOLO DE AMIGOS
+        # =========================
+        st.markdown("---")
+        st.subheader("👥 Ranking de amigos")
+
+        try:
+            df_amigos = load_friends_predictions()
+        except Exception as e:
+            st.info(f"No se pudo cargar el Excel de amigos: {e}")
+            df_amigos = None
+
+        if df_amigos is not None:
+            # Verificamos que tenga las mismas categorías que el Excel principal
+            missing_cols = [c for c in categories if c not in df_amigos.columns]
+            if missing_cols:
+                st.error(
+                    "El Excel de amigos no tiene estas columnas esperadas: "
+                    + ", ".join(missing_cols)
+                )
+            else:
+                resultados_amigos = calculate_scores(df_amigos, categories, winners)
+
+                # Mismas columnas que el ranking general
+                display_cols_amigos = [
+                    "Posición",
+                    "Nombre",
+                    "Puntos totales",
+                    "Puntos base",
+                    "Bonos improbables",
+                    "Aciertos",
+                ]
+                df_amigos_display = resultados_amigos[display_cols_amigos].copy()
+
+                # Posiciones bonitas (1, 2, 3 con medallas)
+                def format_pos_amigos(pos):
+                    if pos == 1:
+                        return "🥇 1"
+                    elif pos == 2:
+                        return "🥈 2"
+                    elif pos == 3:
+                        return "🥉 3"
+                    else:
+                        return str(pos)
+
+                df_amigos_display["Posición"] = df_amigos_display["Posición"].apply(
+                    format_pos_amigos
+                )
+
+                # Usamos "Posición" como índice para que no salga la columna 0,1,2...
+                df_amigos_display = df_amigos_display.set_index("Posición")
+
+                # Resaltar al usuario seleccionado también en el ranking de amigos
+                def highlight_row_amigos(row):
+                    if selected_name != "(Nadie)" and row["Nombre"] == selected_name:
+                        return [
+                            "background-color: #fff3b0; color: black; font-weight: bold;"
+                        ] * len(row)
+                    return [""] * len(row)
+
+                styled_amigos = df_amigos_display.style.apply(
+                    highlight_row_amigos, axis=1
+                )
+
+                # Tabla de amigos, un poco más bajita
+                st.dataframe(
+                    styled_amigos,
+                    use_container_width=True,
+                    height=400,
+                )
+
+                # (Opcional) mostrar tu posición entre amigos si quieres
+                if selected_name != "(Nadie)":
+                    tu_registro_amigos = resultados_amigos[
+                        resultados_amigos["Nombre"] == selected_name
+                    ]
+                    if not tu_registro_amigos.empty:
+                        st.markdown("#### ⭐ Tu posición entre amigos")
+                        tu_fila_amigos = df_amigos_display[
+                            df_amigos_display["Nombre"] == selected_name
+                        ]
+                        st.table(tu_fila_amigos)
+        else:
+            st.caption("No se encontró el archivo de amigos o está vacío.")
+
     else:
         selected_name = "(Nadie)"
         st.info("Define al menos un ganador en el panel lateral para ver el ranking.")
